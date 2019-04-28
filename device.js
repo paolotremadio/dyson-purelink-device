@@ -155,6 +155,12 @@ class Device extends EventEmitter {
     return this.getRotationStatus()
   }
 
+  setTimer (minutes) {
+    const sltm = minutes ? String(minutes).padStart(4, '0')  : 'OFF'
+    this._setStatus({ sltm })
+    return this.getRotationStatus()
+  }
+
   _connect () {
     this.options = {
       keepalive: 10,
