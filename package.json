@@ -1,7 +1,7 @@
 {
   "name": "dyson-purelink-device",
   "version": "1.0.0",
-  "main": "index.js",
+  "main": "device.js",
   "repository": "https://github.com/paolotremadio/dyson-purelink-device.git",
   "author": "Paolo Tremadio <hello@paolotremadio.com>",
   "license": "MIT",
