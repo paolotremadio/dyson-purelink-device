@@ -1,0 +1,12 @@
+{
+  "name": "dyson-purelink-device",
+  "version": "1.0.0",
+  "main": "index.js",
+  "repository": "https://github.com/paolotremadio/dyson-purelink-device.git",
+  "author": "Paolo Tremadio <hello@paolotremadio.com>",
+  "license": "MIT",
+  "dependencies": {
+    "debug": "^4.1.1",
+    "mqtt": "^2.18.8"
+  }
+}
