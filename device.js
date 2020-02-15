@@ -1,240 +1,169 @@
-// Original version: https://github.com/auchenberg/dyson-purelink/blob/master/device.js
+const mqtt = require('mqtt');
+const EventEmitter = require('events');
+const debug = require('debug')('dyson/device');
 
-const mqtt = require('mqtt')
-const EventEmitter = require('events')
-const debug = require('debug')('dyson/device')
+const { dysonFanState } = require('./fan-state');
+const { dysonSensorData } = require('./sensor-data');
 
 class Device extends EventEmitter {
-  constructor (deviceInfo) {
-    super()
+  constructor(deviceInfo) {
+    super();
 
-    this.password = null
-    this.username = null
-    this.ip = null
-    this.url = null
-    this.name = null
-    this.port = null
-    this.serial = null
-    this.name = null
-    this.sensitivity = deviceInfo.sensitivity || 1.0
+    this.username = deviceInfo.username;
+    this.password = deviceInfo.password;
+    this.ip = deviceInfo.ip;
+    this.port = deviceInfo.port;
+    this.url = (this.port.port === 443 ? 'mqtts://' : 'mqtt://') + this.ip;
+    this.name = deviceInfo.name;
+    this.serial = deviceInfo.serial;
+    this.sensitivity = deviceInfo.sensitivity || 1.0;
 
-    this._MQTTPrefix = '475'
-    this._deviceInfo = deviceInfo
+    this.mqttPrefix = deviceInfo.mqttPrefix || '475';
+    this.apiV2018 = this.mqttPrefix === '438';
 
-    if (this._deviceInfo.Serial) {
-      this.serial = this._deviceInfo.Serial
-    }
-
-    if (this._deviceInfo.Name) {
-      this.name = this._deviceInfo.Name
-    }
+    this.topicCommand = `${this.mqttPrefix}/${this.serial}/command`;
   }
 
-  updateNetworkInfo (info) {
-    this.ip = info.ip
-    this.url = (info.port === 443 ? 'mqtts://' : 'mqtt://') + this.ip
-    this.name = info.name
-    this.port = info.port
-    this._MQTTPrefix = info.mqttPrefix || '475'
-
-    // debug('updateNetworkInfo', JSON.stringify(info))
-    this._connect()
+  getCurrentState() {
+    return new Promise((resolve) => {
+      this.once('state', (state) => {
+        resolve(state);
+      });
+      this.requestCurrentState();
+    });
   }
 
-  getTemperature () {
-    return new Promise((resolve, reject) => {
-      this.once('sensor', (json) => {
-        const temperature = parseFloat(((parseInt(json.data.tact, 10) / 10) - 273.15).toFixed(2))
-        resolve(temperature)
-      })
-      this._requestCurrentState()
-    })
+  getCurrentSensorData() {
+    return new Promise((resolve) => {
+      this.once('sensor', (sensor) => {
+        resolve(sensor);
+      });
+      this.requestCurrentState();
+    });
   }
 
-  getRelativeHumidity () {
-    return new Promise((resolve, reject) => {
-      this.once('sensor', (json) => {
-        const relativeHumidity = parseInt(json.data.hact)
-        resolve(relativeHumidity)
-      })
-      this._requestCurrentState()
-    })
-  }
+  setState({
+    isOn, rotationSpeed, swingMode, mode, autOffTimerMinutes,
+  }) {
+    const { auto, night, focus } = mode || {};
+    const payload = {};
 
-  getAirQuality () {
-    return new Promise((resolve, reject) => {
-      this.once('sensor', (json) => {
-        let dustValue = Number.parseInt(json.data.pact || json.data.pm10)
-        let vocValue = Number.parseInt(json.data.vact || json.data.va10)
-        let airQuality = 0
-
-        if (isNaN(dustValue) || isNaN(vocValue)) {
-          airQuality = 0
-        } else {
-          airQuality = Math.min(Math.max(Math.floor((dustValue + vocValue) / 2 * this.sensitivity), 1), 5)
-        }
-
-        resolve(airQuality)
-      })
-      this._requestCurrentState()
-    })
-  }
-
-  getFanStatus () {
-    return new Promise((resolve, reject) => {
-      this.once('state', (json) => {
-        const fpwr = json['product-state']['fpwr']
-        const isOn = (fpwr === 'ON')
-        resolve(isOn)
-      })
-      this._requestCurrentState()
-    })
-  }
-
-  getFanSpeed () {
-    return new Promise((resolve, reject) => {
-      this.once('state', (json) => {
-        const fnsp = json['product-state']['fnsp']
-        const rotationSpeed = fnsp === 'AUTO' ? 'AUTO' : parseInt(fnsp, 10)
-        resolve(rotationSpeed)
-      })
-      this._requestCurrentState()
-    })
-  }
-
-  getAutoOnStatus () {
-    return new Promise((resolve, reject) => {
-      this.once('state', (json) => {
-        const isOn = (json['product-state']['auto'] === 'ON')
-        resolve(isOn)
-      })
-      this._requestCurrentState()
-    })
-  }
-
-  getRotationStatus () {
-    return new Promise((resolve, reject) => {
-      this.once('state', (json) => {
-        const oson = json['product-state']['oson']
-        const isOn = (oson === 'ON')
-        resolve(isOn)
-      })
-      this._requestCurrentState()
-    })
-  }
-
-  turnOff () {
-    return this.setFan(false)
-  }
-
-  turnOn () {
-    return this.setFan(true)
-  }
-
-  setFan (value) {
-    const data = this._apiV2018?{fpwr:value?'ON':'OFF'}:{fmod:value?'FAN':'OFF'}
-    this._setStatus(data)
-    return this.getFanStatus()
-  }
-
-  setFanSpeed (value) {
-    const fnsp = Math.round(value / 10)
-    this._setStatus({ fnsp: this._apiV2018 ? "000" + fnsp : fnsp })
-    return this.getFanSpeed()
-  }
-
-  setAuto (value) {
-    const data = this._apiV2018 ? { auto:value?'ON':'OFF'} : { fmod:value?'AUTO':'OFF'}
-    this._setStatus(data)
-    return this.getAutoOnStatus()
-  }
-
-  setRotation (value) {
-    const oson = value ? 'ON' : 'OFF'
-    this._setStatus({ oson })
-    return this.getRotationStatus()
-  }
-
-  setTimer (minutes) {
-    const sltm = minutes ? String(minutes).padStart(4, '0')  : 'OFF'
-    this._setStatus({ sltm })
-    return this.getRotationStatus()
-  }
-
-  _connect () {
-    this.options = {
-      keepalive: 10,
-      clientId: 'dyson_' + Math.random().toString(16),
-      // protocolId: 'MQTT',
-      // protocolVersion: 4,
-      clean: true,
-      reconnectPeriod: 1000,
-      connectTimeout: 30 * 1000,
-      username: this.username,
-      password: this.password,
-      port: this.port,
-      rejectUnauthorized: false
-    }
-
-    this._apiV2018 = this._MQTTPrefix === '438'
-
-    if (this._MQTTPrefix === '438' || this._MQTTPrefix === '520') {
-      this.options.protocolVersion = 3
-      this.options.protocolId = 'MQIsdp'
-    }
-
-    debug(`MQTT (${this._MQTTPrefix}): connecting to ${this.url}`)
-
-    this.client = mqtt.connect(this.url, this.options)
-
-    this.client.on('connect', () => {
-      debug(`MQTT: connected to ${this.url}`)
-      this.client.subscribe(this._getCurrentStatusTopic())
-    })
-
-    this.client.on('message', (topic, message) => {
-      let json = JSON.parse(message)
-      debug(`MQTT: got message ${message}`)
-
-      if (json !== null) {
-        if (json.msg === 'ENVIRONMENTAL-CURRENT-SENSOR-DATA') {
-          this.emit('sensor', json)
-        }
-        if (json.msg === 'CURRENT-STATE') {
-          this.emit('state', json)
-        }
+    if (isOn !== undefined) {
+      if (this.apiV2018) {
+        payload.fpwr = isOn ? 'ON' : 'OFF';
+      } else {
+        payload.fmod = isOn ? 'FAN' : 'OFF';
       }
-    })
-  }
+    }
 
-  _requestCurrentState () {
-    this.client.publish(this._getCommandTopic(), JSON.stringify({
-      msg: 'REQUEST-CURRENT-STATE',
-      time: new Date().toISOString()
-    }))
-  }
+    if (rotationSpeed !== undefined) {
+      const fnsp = Math.round(rotationSpeed / 10).toString();
+      payload.fnsp = this.apiV2018 ? `000${fnsp}` : fnsp;
+    }
 
-  _setStatus (data) {
+    if (swingMode !== undefined) {
+      payload.oson = swingMode ? 'ON' : 'OFF';
+    }
+
+    if (auto !== undefined) {
+      if (this.apiV2018) {
+        payload.auto = auto ? 'ON' : 'OFF';
+      } else {
+        payload.fmod = auto ? 'AUTO' : 'OFF';
+      }
+    }
+
+    if (night !== undefined) {
+      payload.nmod = night ? 'ON' : 'OFF';
+    }
+
+    if (focus !== undefined) {
+      if (this.apiV2018) {
+        payload.fdir = focus ? 'ON' : 'OFF';
+      } else {
+        payload.ffoc = focus ? 'ON' : 'OFF';
+      }
+    }
+
+    if (autOffTimerMinutes !== undefined) {
+      this.sltm = autOffTimerMinutes ? String(autOffTimerMinutes).padStart(4, '0') : 'OFF';
+    }
+
     const message = JSON.stringify({
       msg: 'STATE-SET',
-      "mode-reason":"LAPP",
+      'mode-reason': 'LAPP',
       time: new Date().toISOString(),
-      data
-    })
+      data: payload,
+    });
 
     this.client.publish(
-      this._getCommandTopic(),
-      message
-    )
+      this.topicCommand,
+      message,
+    );
   }
 
-  _getCurrentStatusTopic () {
-    return `${this._MQTTPrefix}/${this.serial}/status/current`
+  async connect(pollEvery = false) {
+    await new Promise((resolve) => {
+      const options = {
+        keepalive: 10,
+        clientId: `dyson_${Math.random().toString(16)}`,
+        // protocolId: 'MQTT',
+        // protocolVersion: 4,
+        clean: true,
+        reconnectPeriod: 1000,
+        connectTimeout: 30 * 1000,
+        username: this.username,
+        password: this.password,
+        port: this.port,
+        rejectUnauthorized: false,
+      };
+
+      if (this.mqttPrefix === '438' || this.mqttPrefix === '520') {
+        options.protocolVersion = 3;
+        options.protocolId = 'MQIsdp';
+      }
+
+      debug(`MQTT (${this.mqttPrefix}): connecting to ${this.url}`);
+
+      this.client = mqtt.connect(this.url, options);
+
+      this.client.on('connect', () => {
+        debug(`MQTT: connected to ${this.url}`);
+        this.client.subscribe(`${this.mqttPrefix}/${this.serial}/status/current`);
+        resolve();
+      });
+
+      this.client.on('message', (topic, message) => {
+        const json = JSON.parse(message);
+        debug(`MQTT: got message ${message}`);
+
+        if (json !== null) {
+          if (json.msg === 'ENVIRONMENTAL-CURRENT-SENSOR-DATA') {
+            this.emit('sensor', dysonSensorData(json));
+          }
+
+          if (json.msg === 'CURRENT-STATE') {
+            this.emit('state', dysonFanState(json, this.apiV2018));
+          }
+        }
+      });
+    });
+
+    this.requestCurrentState();
+
+    if (pollEvery) {
+      setInterval(() => {
+        this.requestCurrentState();
+      }, pollEvery);
+    }
   }
 
-  _getCommandTopic () {
-    return `${this._MQTTPrefix}/${this.serial}/command`
+  requestCurrentState() {
+    this.client.publish(this.topicCommand, JSON.stringify({
+      msg: 'REQUEST-CURRENT-STATE',
+      time: new Date().toISOString(),
+    }));
   }
 }
 
-module.exports = Device
+module.exports = Device;

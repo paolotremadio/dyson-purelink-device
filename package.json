@@ -5,8 +5,16 @@
   "repository": "https://github.com/paolotremadio/dyson-purelink-device.git",
   "author": "Paolo Tremadio <hello@paolotremadio.com>",
   "license": "MIT",
+  "scripts": {
+    "lint": "eslint . --ext .js"
+  },
   "dependencies": {
     "debug": "^4.1.1",
     "mqtt": "^2.18.8"
+  },
+  "devDependencies": {
+    "eslint": "^5.16.0",
+    "eslint-config-airbnb-base": "^13.1.0",
+    "eslint-plugin-import": "^2.17.2"
   }
 }
