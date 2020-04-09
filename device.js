@@ -100,6 +100,10 @@ class Device extends EventEmitter {
       this.topicCommand,
       message,
     );
+
+    // Dyson will not report the new state after sending a command.
+    // Explicitly request for new state in order to receive the updated status.
+    this.requestCurrentState();
   }
 
   async connect(pollEvery = false) {
